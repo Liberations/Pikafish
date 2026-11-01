@@ -1,12 +1,10 @@
 name: Pikafish
-
 on:
   push:
     branches:
       - master
     tags:
       - 'Pikafish-*'
-
 jobs:
   Pikafish-x86-64:
     name: ${{ matrix.config.name }}-x86-64-universal
@@ -29,17 +27,14 @@ jobs:
       run:
         working-directory: src
         shell: ${{ matrix.config.shell }}
-
     steps:
       - uses: actions/checkout@v7
-
       - name: Setup msys and install required packages
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: clang64
           install: mingw-w64-clang-x86_64-clang make git
-
       - name: Set up LLVM
         if: runner.os == 'Linux'
         run: |
@@ -49,17 +44,38 @@ jobs:
           echo "EXTRACXXFLAGS=-stdlib=libc++" >> $GITHUB_ENV
           echo "EXTRALDFLAGS=-stdlib=libc++" >> $GITHUB_ENV
           echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> $GITHUB_PATH
-
       - name: Compile universal build
         run: |
           make -j4 build EXE=$EXE
           make strip EXE=$EXE
           cp $EXE ../
-
       # Artifacts automatically get zipped.
       # To avoid double-zipping, we use the unzipped directory
       - uses: actions/upload-artifact@v7
-        with:	
+        with:
+          name: ${{ env.EXE }}
+          path: ${{ env.EXE }}
+
+  Pikafish-x86-64-bmi2:
+    name: Linux-x86-64-bmi2
+    runs-on: ubuntu-24.04
+    env:
+      ARCH: x86-64-bmi2
+      COMP: gcc
+      EXE: Pikafish-Linux-x86-64-bmi2
+    defaults:
+      run:
+        working-directory: src
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile bmi2 build
+        run: |
+          make -j4 build EXE=$EXE
+          make strip EXE=$EXE
+          cp $EXE ../
+      - uses: actions/upload-artifact@v7
+        with:
           name: ${{ env.EXE }}
           path: ${{ env.EXE }}
 
@@ -73,23 +89,19 @@ jobs:
       run:
         working-directory: src
         shell: bash
-
     steps:
       - uses: actions/checkout@v7
-
       - name: Compile universal build
         run: |
           make -j3 macos-lipo EXE=$EXE
           make strip EXE=$EXE
           cp $EXE ../
-
       # Artifacts automatically get zipped.
       # To avoid double-zipping, we use the unzipped directory
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.EXE }}
           path: ${{ env.EXE }}
-
   Pikafish-Android:
     name: Android-${{ matrix.arch }}-universal
     runs-on: ubuntu-latest
@@ -106,10 +118,8 @@ jobs:
     defaults:
       run:
         working-directory: src
-
     steps:
       - uses: actions/checkout@v7
-
       - name: Install NDK
         run: |
           NDKV="28.2.13676358"
@@ -120,43 +130,35 @@ jobs:
           ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/$NDKV
           ANDROID_NDK_BIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin
           echo "ANDROID_NDK_BIN=$ANDROID_NDK_BIN" >> $GITHUB_ENV
-
       - name: Compile universal build
         run: |
           export PATH=${{ env.ANDROID_NDK_BIN }}:$PATH
           make -j4 build EXE=$EXE
           make strip EXE=$EXE
           cp $EXE ../
-
       # Artifacts automatically get zipped.
       # To avoid double-zipping, we use the unzipped directory
       - uses: actions/upload-artifact@v7
-        with:	
+        with:
           name: ${{ env.EXE }}
           path: ${{ env.EXE }}
-
   Pikafish:
     name: Pikafish
     runs-on: ubuntu-slim
-    needs: [Pikafish-x86-64, Pikafish-MacOS, Pikafish-Android]
-
+    needs: [Pikafish-x86-64, Pikafish-x86-64-bmi2, Pikafish-MacOS, Pikafish-Android]
     steps:
       - uses: actions/checkout@v7
-
       - uses: actions/download-artifact@v8
         with:
           pattern: Pikafish-*
           path: Artifacts
-
       - name: Put binaries into release root
         run: cp Artifacts/Pikafish-*/* .
-
       - name: Download wiki
         run: |
           git clone https://github.com/official-pikafish/Pikafish.wiki.git Wiki
           cd Wiki
           rm -rf .git
-
       # Artifacts automatically get zipped.
       # To avoid double-zipping, we use the unzipped directory
       - uses: actions/upload-artifact@v7
@@ -170,7 +172,6 @@ jobs:
             Copying.txt
             README.md
             Top CPU Contributors.txt
-
   Pikafish-release:
     name: Create draft release
     runs-on: ubuntu-latest
@@ -179,21 +180,17 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/Pikafish-')
     permissions:
       contents: write
-
     steps:
       - uses: actions/download-artifact@v8
         with:
           name: Pikafish
           path: release
-
       - name: Install 7-Zip
         run: sudo apt-get update && sudo apt-get install -y p7zip-full
-
       - name: Package release archive
         run: |
           VERSION="${GITHUB_REF_NAME#Pikafish-}"
           (cd release && 7z a "../Pikafish.${VERSION}.7z" ./*)
-
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
