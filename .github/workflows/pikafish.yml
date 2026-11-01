@@ -69,10 +69,13 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-      - name: Compile bmi2 build
+      - name: Install static libraries
+        run: sudo apt-get update && sudo apt-get install -y libstdc++-14-dev libc6-dev
+      - name: Compile bmi2 static build
         run: |
-          make -j4 build EXE=$EXE
+          make -j4 build EXE=$EXE LDFLAGS="-static"
           make strip EXE=$EXE
+          file $EXE | grep statically || echo "WARNING: binary is not fully static"
           cp $EXE ../
       - uses: actions/upload-artifact@v7
         with:
