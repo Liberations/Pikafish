@@ -1338,7 +1338,7 @@ bool Position::has_mate_threat(Depth d) {
         return false;
 
     StateInfo tempSt[2];
-    for (const auto& check : MoveList<LEGAL>(*this))
+    for (const auto& check : MoveList<ALL>(*this))
     {
         if (!gives_check(check))
             continue;
@@ -1346,7 +1346,7 @@ bool Position::has_mate_threat(Depth d) {
         do_move(check, tempSt[0]);
         bool solvable = false;
 
-        for (const auto& evasion : MoveList<LEGAL>(*this))
+        for (const auto& evasion : MoveList<ALL>(*this))
         {
             do_move(evasion, tempSt[1]);
             solvable = !has_mate_threat(d + 1);
@@ -1876,7 +1876,7 @@ bool Position::rule_judge(Value& result, int ply) {
     if (RuleConfig::sixtyMoveRule && RuleConfig::rule60MaxPly > 0
         && st->rule60 >= RuleConfig::rule60MaxPly)
     {
-        result = MoveList<LEGAL>(*this).size() ? VALUE_DRAW : mated_in(ply);
+        result = MoveList<ALL>(*this).size() ? VALUE_DRAW : mated_in(ply);
         apply_draw_rule(false);
         return true;
     }
