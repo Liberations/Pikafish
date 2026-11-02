@@ -39,7 +39,6 @@
 #include "movegen.h"
 #include "nnue/nnue_common.h"
 #include "nnue/nnue_architecture.h"
-#include "tt.h"
 #include "uci.h"
 
 using std::string;
@@ -150,7 +149,7 @@ std::optional<PositionSetError> Position::set(const string& fenStr, StateInfo* s
     std::memset(si, 0, sizeof(StateInfo));
     st = si;
 
-    midEncoding[WHITE] = midEncoding[BLACK] = Eval::NNUE::Features::HalfKAv2_hm::BalanceEncoding;
+    midEncoding[WHITE] = midEncoding[BLACK] = Eval::NNUE::Features::K6H4::BalanceEncoding;
 
     ss >> std::noskipws;
 
@@ -229,7 +228,7 @@ std::optional<PositionSetError> Position::set(const string& fenStr, StateInfo* s
 
         for (PieceType pt : {ADVISOR, PAWN, BISHOP, KING})
         {
-            Bitboard valid = Eval::NNUE::Features::HalfKAv2_hm::ValidBB[make_piece(c, pt)];
+            Bitboard valid = Eval::NNUE::Features::K6H4::ValidBB[make_piece(c, pt)];
             // NNUE mirroring feature does not allow white king on the right flank, we allow here.
             if (c == WHITE && pt == KING)
                 valid = HalfBB[WHITE] & Palace;
@@ -280,23 +279,22 @@ std::optional<PositionSetError> Position::set(const string& fenStr, StateInfo* s
 }
 
 
-// Sets king attacks to detect if a move gives check
-void Position::set_check_info() const {
+// Sets pinners and where stm can give check. Squares threatened by ~stm are
+// computed lazily by compute_threats().
+void Position::set_extra_bitboards() const {
 
     update_blockers<WHITE>();
     update_blockers<BLACK>();
 
     Square ksq = king_square(~sideToMove);
 
-    // We have to take special cares about the hollow cannons and checks
-    st->needFullCheck =
-      checkers() || (attacks_bb(ROOK, king_square(sideToMove)) & pieces(~sideToMove, CANNON));
-
     st->checkSquares[PAWN]   = attacks_bb(PAWN_TO, ksq, sideToMove);
     st->checkSquares[KNIGHT] = attacks_bb(KNIGHT_TO, ksq, pieces());
     st->checkSquares[CANNON] = attacks_bb(CANNON, ksq, pieces());
     st->checkSquares[ROOK]   = attacks_bb(ROOK, ksq, pieces());
     st->checkSquares[KING] = st->checkSquares[ADVISOR] = st->checkSquares[BISHOP] = 0;
+
+    st->threats[ALL_PIECES] = 0;
 
     Bitboard hollowCannons = st->checkSquares[ROOK] & pieces(sideToMove, CANNON);
     if (hollowCannons)
@@ -307,6 +305,19 @@ void Position::set_check_info() const {
         for (PieceType pt = ROOK; pt < KING; ++pt)
             st->checkSquares[pt] |= hollowCannonDiscover;
     }
+}
+
+
+void Position::compute_threats() const {
+
+    Bitboard occ            = pieces() ^ king_square(sideToMove);
+    st->threats[ALL_PIECES] = st->threats[PAWN]     = xattacks_by(PAWN, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[BISHOP]  = xattacks_by(BISHOP, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[ADVISOR] = xattacks_by(ADVISOR, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[KNIGHT]  = xattacks_by(KNIGHT, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[CANNON]  = xattacks_by(CANNON, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[ROOK]    = xattacks_by(ROOK, ~sideToMove, occ);
+    st->threats[ALL_PIECES] |= st->threats[KING]    = xattacks_by(KING, ~sideToMove, occ);
 }
 
 
@@ -323,7 +334,7 @@ void Position::set_state() const {
     st->checkersBB = checkers_to(~sideToMove, king_square(sideToMove));
     st->move       = Move::none();
 
-    set_check_info();
+    set_extra_bitboards();
 
     for (Bitboard b = pieces(); b;)
     {
@@ -447,43 +458,12 @@ Bitboard Position::checkers_to(Color c, Square s, Bitboard occupied) const {
 }
 
 
-// Tests whether a pseudo-legal move is legal
+// Takes a random move and tests whether the move is legal. It is used to validate moves
+// from TT that can be corrupted due to SMP concurrent access or hash position key aliasing.
 bool Position::legal(Move m) const {
 
-    assert(m.is_ok());
-
-    Color    us       = sideToMove;
-    Square   from     = m.from_sq();
-    Square   to       = m.to_sq();
-    Bitboard occupied = (pieces() ^ from) | to;
-
-    assert(color_of(moved_piece(m)) == us);
-    assert(piece_on(king_square(us)) == make_piece(us, KING));
-
-    // If the moving piece is a king, check whether the destination square is
-    // attacked by the opponent.
-    if (type_of(piece_on(from)) == KING)
-        return !(checkers_to(~us, to, occupied));
-
-    // If we don't need full check. A non-king move is always legal when either:
-    // 1. Not moving a pinned piece.
-    // 2. Moving a pinned non-cannon piece and aligned with king.
-    // 3. Moving a pinned cannon and aligned with king but it's not a capture move.
-    if (!st->needFullCheck
-        && (!(blockers_for_king(us) & from)
-            || (((type_of(piece_on(from)) != CANNON) || !capture(m))
-                && aligned(from, to, king_square(us)))))
-        return true;
-
-    // A non-king move is legal if the king is not under attack after the move.
-    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
-}
-
-
-// Takes a random move and tests whether the move is
-// pseudo-legal. It is used to validate moves from TT that can be corrupted
-// due to SMP concurrent access or hash position key aliasing.
-bool Position::pseudo_legal(const Move m) const {
+    if (!m.is_ok() || !is_ok(m.from_sq()) || !is_ok(m.to_sq()))
+        return false;
 
     Color  us   = sideToMove;
     Square from = m.from_sq();
@@ -513,14 +493,29 @@ bool Position::pseudo_legal(const Move m) const {
     else if (!(attacks_bb(type_of(pc), from, pieces()) & to))
         return false;
 
-    if (checkers())
-        return MoveList<EVASIONS>(*this).contains(m);
+    Bitboard occupied = (pieces() ^ from) | to;
 
-    return true;
+    // If the moving piece is a king, check whether the destination square is
+    // attacked by the opponent.
+    if (type_of(piece_on(from)) == KING)
+        return !(to & threats_by(ALL_PIECES));
+
+    // Moving an unpinned piece cannot expose an attack.
+    if (!checkers() && !(blockers_for_king(us) & from))
+    {
+        // Only a quiet move onto a king ray can create a new cannon screen.
+        if (capture(m) || !(attacks_bb(ROOK, king_square(us)) & to))
+            return true;
+
+        return !(attacks_bb(CANNON, king_square(us), occupied) & pieces(~us, CANNON));
+    }
+
+    // A non-king move is legal if the king is not under attack after the move.
+    return !(checkers_to(~us, king_square(us), occupied) & ~square_bb(to));
 }
 
 
-// Tests whether a pseudo-legal move gives a check
+// Tests whether a legal move gives a check
 bool Position::gives_check(Move m) const {
 
     assert(m.is_ok());
@@ -552,14 +547,10 @@ bool Position::gives_check(Move m) const {
 // Makes a move, and saves all information necessary
 // to a StateInfo object. The move is assumed to be legal. Pseudo-legal
 // moves should be filtered out before this function is called.
-// If a pointer to the TT table is passed, the entry for the new position
-// will be prefetched, and likewise for shared history.
-void Position::do_move(Move                      m,
-                       StateInfo&                newSt,
-                       bool                      givesCheck,
-                       Dirties&                  dirties,
-                       const TranspositionTable* tt      = nullptr,
-                       const SharedHistories*    history = nullptr) {
+// If a pointer to the shared histories is passed, their entries for the
+// new position will be prefetched.
+void Position::do_move(
+  Move m, StateInfo& newSt, bool givesCheck, Dirties& dirties, const SharedHistories* history) {
 
     using namespace Eval::NNUE;
 
@@ -644,8 +635,6 @@ void Position::do_move(Move                      m,
 
     // Update hash key
     k ^= Zobrist::psq[pc][from] ^ Zobrist::psq[pc][to];
-    if (tt)
-        prefetch(tt->first_entry(adjust_key60(k)));
     // Update the key with the final value
     st->key = k;
 
@@ -669,39 +658,13 @@ void Position::do_move(Move                      m,
         prefetch(&history->nonpawn_correction_entry<BLACK>(*this));
     }
 
-    bool mirror_before[2] = {
-      PSQFeatureSet::KingBuckets[king_square(us)][king_square(them)]
-                                [PSQFeatureSet::requires_mid_mirror(*this, us)]
-                                  .second,
-      PSQFeatureSet::KingBuckets[king_square(them)][king_square(us)]
-                                [PSQFeatureSet::requires_mid_mirror(*this, them)]
-                                  .second};
-    dp.requires_refresh[them] = false;
-    dp.requires_refresh[us]   = pc == make_piece(us, KING);
-
     if (captured)
     {
-        auto attack_bucket_before = PSQFeatureSet::make_attack_bucket(*this, them);
-
         remove_piece(from, &dts);
         swap_piece(to, pc, &dts);
-
-        auto attack_bucket_after = PSQFeatureSet::make_attack_bucket(*this, them);
-
-        dp.requires_refresh[them] |= (attack_bucket_before != attack_bucket_after);
     }
     else
         move_piece(from, to, &dts);
-
-    bool mirror_after[2] = {
-      PSQFeatureSet::KingBuckets[king_square(us)][king_square(them)]
-                                [PSQFeatureSet::requires_mid_mirror(*this, us)]
-                                  .second,
-      PSQFeatureSet::KingBuckets[king_square(them)][king_square(us)]
-                                [PSQFeatureSet::requires_mid_mirror(*this, them)]
-                                  .second};
-    dp.requires_refresh[us] |= (mirror_before[0] != mirror_after[0]);
-    dp.requires_refresh[them] |= (mirror_before[1] != mirror_after[1]);
 
     // Set capture piece
     st->capturedPiece = captured;
@@ -713,7 +676,7 @@ void Position::do_move(Move                      m,
     sideToMove = ~sideToMove;
 
     // Update king attacks used for fast check detection
-    set_check_info();
+    set_extra_bitboards();
 
     assert(pos_is_ok());
 
@@ -959,7 +922,7 @@ void Position::do_null_move(StateInfo& newSt) {
 
     sideToMove = ~sideToMove;
 
-    set_check_info();
+    set_extra_bitboards();
 
     assert(pos_is_ok());
 }
@@ -1958,7 +1921,7 @@ bool Position::rule_judge(Value& result, int ply) {
         {
             if (level == MATE_DRAW)
             {
-                MoveList<LEGAL> moves(*this);
+                MoveList<ALL> moves(*this);
                 if (moves.size() == 0)
                 {
                     result = mated_in(ply);
@@ -1968,7 +1931,7 @@ bool Position::rule_judge(Value& result, int ply) {
                 {
                     StateInfo tempSt;
                     do_move(move, tempSt);
-                    bool mate = MoveList<LEGAL>(*this).size() == 0;
+                    bool mate = MoveList<ALL>(*this).size() == 0;
                     undo_move(move);
                     if (mate)
                         return false;

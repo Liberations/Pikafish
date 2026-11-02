@@ -249,6 +249,8 @@ enum Direction : i8 {
     NORTH_WEST = NORTH + WEST
 };
 
+inline constexpr Direction operator-(Direction dir) { return Direction(-i8(dir)); }
+
 enum File : u8 {
     FILE_A,
     FILE_B,
@@ -294,8 +296,6 @@ struct DirtyPiece {
     // if remove_sq is SQ_NONE, remove_pc is allowed to be uninitialized
     Square remove_sq;
     Piece  remove_pc;
-
-    bool requires_refresh[2];
 };
 
 // Keep track of what threats change on the board (used by NNUE)
@@ -338,7 +338,6 @@ ENABLE_INCR_OPERATORS_ON(Rank)
 
     #undef ENABLE_INCR_OPERATORS_ON
 
-constexpr Direction operator-(Direction d) { return Direction(-int(d)); }
 constexpr Direction operator+(Direction d1, Direction d2) { return Direction(int(d1) + int(d2)); }
 constexpr Direction operator*(int i, Direction d) { return Direction(i * int(d)); }
 
